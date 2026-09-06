@@ -7,19 +7,23 @@
 // driver; the implicit `unsafe` is in the launch contract.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-//! TMA Multicast Example (sm_90+ per the ISA; ships as sm_100a)
+//! TMA Multicast Example (sm_90+)
 //!
-//! Demonstrates TMA multicast — a single TMA load broadcasts a tile to
+//! Demonstrates TMA multicast: a single TMA load broadcasts a tile to
 //! the shared memory of ALL CTAs in a thread block cluster.
 //!
 //! Requirements:
 //! - The instruction: `cp.async.bulk.tensor` with `.multicast::cluster` is
 //!   sm_90+ in the PTX ISA. `sm_90a` is advised for performance, not required
 //!   for legality, which is what the sm_90+ catalog row records.
-//! - This build: ships as `.target sm_100a`, so the driver JIT accepts it on
-//!   datacenter B100/B200/GB200 and on consumer sm_120 (measured in #668).
-//!   To run it on Hopper, build with `--arch=sm_90a`; whether that build
-//!   passes on real Hopper hardware is untested and tracked in #966.
+//! - The build target: `cargo oxide run` forwards the detected GPU as a hint
+//!   and rustc-codegen-cuda builds for it whenever the kernel's features run
+//!   there. So an RTX 5090 gets `.target sm_120a` and an H100 gets
+//!   `.target sm_90a`. Only when no compatible GPU is detected (`cargo oxide
+//!   build`, or `run` on a pre-Hopper GPU) does the target fall back to
+//!   sm_100a. The host binary never knows which target it embeds.
+//! - Verified on sm_120 (#668). The sm_90a Hopper run is not yet captured
+//!   and is expected to build and execute (#966).
 //!
 //! Build and run with:
 //!   cargo oxide run tma_multicast
@@ -149,7 +153,7 @@ const TENSOR_SIZE: usize = (TENSOR_WIDTH * TENSOR_HEIGHT) as usize;
 const CLUSTER_SIZE: usize = 4;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== TMA Multicast Example (sm_100a) ===\n");
+    println!("=== TMA Multicast Example ===\n");
 
     let ctx = CudaContext::new(0)?;
     let stream = ctx.default_stream();
@@ -157,11 +161,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (major, minor) = ctx.compute_capability()?;
     println!("GPU Compute Capability: sm_{}{}", major, minor);
 
-    // The ISA floor for multicast, not this build's target. A Hopper GPU
-    // falls through to `load` below: an `--arch=sm_90a` build will JIT there,
-    // and the default sm_100a build will not, which the load arm reports as
-    // its own clean skip. Same contract as that arm -- the marker has to be on
-    // whichever path actually runs.
+    // The ISA floor for multicast. Anything sm_90 or newer falls through to
+    // `load` below, which is where a target mismatch (a module built on
+    // another machine or with --arch) surfaces. Same clean-skip contract as
+    // that arm: the marker has to be on whichever path actually runs.
     if major < 9 {
         println!("\nskipping: TMA multicast requires sm_90 or newer");
         println!(
@@ -177,16 +180,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_tma_multicast_test(&stream, &module)?;
         }
         Err(e) => {
-            // This build ships `.target sm_100a`, so the driver JIT rejects
-            // it anywhere that target does not apply and returns 218, which
-            // `load` surfaces through its `Driver` variant. Treat that as a
-            // clean skip so the smoketest's failure-marker scan doesn't flag
-            // it as a regression — the PTX itself was generated, which is all
-            // this example can verify off Blackwell.
-            println!("\nskipping: this build targets sm_100a and the driver declined it");
+            // The embedded module was built for a target this GPU cannot JIT
+            // (a module built on another machine, or with --arch), and the
+            // driver returns 218, which `load` surfaces through its `Driver`
+            // variant. The host binary cannot see the embedded target, so
+            // name none. Treat it as a clean skip so the smoketest's
+            // failure-marker scan doesn't flag it as a regression: the PTX
+            // itself was generated, which is all this path can verify.
+            println!("\nskipping: the embedded module did not load on this GPU");
             println!("  driver reported: {}", e);
-            println!("  The sm_100a build runs on B100/B200/GB200 and on sm_120.");
-            println!("  Multicast itself is sm_90+; for Hopper, rebuild with --arch=sm_90a.");
+            println!("  Multicast needs sm_90 or newer. cargo oxide run builds for the");
+            println!(
+                "  detected GPU, so a module built elsewhere or with --arch may not JIT here."
+            );
             println!("  For basic TMA tests, use: cargo oxide run tma_copy");
         }
     }

@@ -69,7 +69,7 @@ The `cta_mask` is a bitmask over cluster ranks. With a `(4,1,1)` cluster:
 ## Generated PTX
 
 ```ptx
-.target sm_100a
+.target sm_120a          // follows the detected GPU; see "Which GPUs Run This?"
 .explicitcluster
 .reqnctapercluster 4, 1, 1
 
@@ -92,10 +92,13 @@ cargo oxide run tma_multicast
 
 ## Expected Output
 
-### On Blackwell Datacenter (sm_100a)
+### On Blackwell Datacenter (sm_100)
+
+`cargo oxide run` builds `.target sm_100a` for a B100/B200/GB200 and the
+module loads and runs:
 
 ```text
-=== TMA Multicast Example (sm_100a) ===
+=== TMA Multicast Example ===
 
 GPU Compute Capability: sm_100
 ✓ embedded module loaded successfully
@@ -114,11 +117,11 @@ GPU Compute Capability: sm_100
 
 ### On Consumer Blackwell (sm_120)
 
-Runs on consumer Blackwell: the sm_100a PTX JIT-loads and passes (first
-verified on an RTX 5090 in #668). Transcript from an RTX 5090:
+`cargo oxide run` builds `.target sm_120a` for an RTX 5090 (first verified
+in #668). Transcript captured on an RTX 5090:
 
 ```text
-=== TMA Multicast Example (sm_100a) ===
+=== TMA Multicast Example ===
 
 GPU Compute Capability: sm_120
 ✓ embedded module loaded successfully
@@ -137,34 +140,20 @@ GPU Compute Capability: sm_120
 
 ### On Hopper (sm_90/sm_90a)
 
-Legal per the ISA, hardware run pending. Multicast is sm_90+ in the PTX ISA,
-and `--arch=sm_90a` builds and assembles. What the default build cannot do is
-*JIT* there, because it ships `.target sm_100a`, so the driver declines it and
-the host reports its own clean skip:
+Multicast is sm_90+ in the PTX ISA, and `cargo oxide run` on an H100 builds
+`.target sm_90a`, so the module is expected to load and execute there. That
+run is not yet captured; #966 tracks it.
 
-Nobody here has run this on Hopper, so the block below is the shape of the
-message the host emits on that path, not a captured transcript:
-
-```text
-GPU Compute Capability: sm_90
-
-skipping: this build targets sm_100a and the driver declined it
-  driver reported: ...
-  The sm_100a build runs on B100/B200/GB200 and on sm_120.
-  Multicast itself is sm_90+; for Hopper, rebuild with --arch=sm_90a.
-  For basic TMA tests, use: cargo oxide run tma_copy
-```
-
-Whether an `--arch=sm_90a` build passes on real Hopper hardware is untested;
-that run is what closes #966.
+The host gate is `major < 9`, the same floor as `tma_copy`. Below sm_90 the
+example prints `skipping: TMA multicast requires sm_90 or newer` and exits
+cleanly.
 
 ## Hardware Requirements
 
-- **Runs on**: Blackwell, both datacenter sm_100a (B100/B200/GB200) and
-  consumer sm_120 (RTX 5090, verified in #668)
-- **Hopper (sm_90/sm_90a)**: legal per the ISA, hardware run pending. The
-  default sm_100a PTX will not JIT there; an `--arch=sm_90a` build assembles
-  but has not been run on the hardware (#966)
+- **Multicast floor**: sm_90 or newer (PTX ISA). Verified on consumer
+  Blackwell sm_120 (RTX 5090, #668); Hopper sm_90a run not yet captured (#966)
+- **Build target**: `cargo oxide run` builds for the detected GPU; there is
+  no fixed target baked into the example (see "Which GPUs Run This?")
 - **Not supported**: anything below sm_90
 - **CUDA Driver**: 12.0+
 - **Cluster launch**: Required (`cuLaunchKernelEx` with cluster dimensions)
@@ -175,7 +164,7 @@ that run is what closes #966.
 |---------------------|----------------------------------|-------------------------------------|
 | Destination         | One CTA's shared memory          | All CTAs in cluster                 |
 | Bandwidth           | 1x tile transfer                 | 1x transfer, N copies               |
-| Architecture        | sm_90+ (Hopper+)                 | Blackwell (sm_100a, sm_120)         |
+| Architecture        | sm_90+ (Hopper+)                 | sm_90+ (Hopper+), seen on sm_120    |
 | Use case            | Single-CTA tile loads            | GEMM/convolution with shared tiles  |
 | `cluster_launch`    | Optional                         | Required                            |
 
@@ -194,18 +183,23 @@ the multicast fires, the barrier tracking will be silently corrupt.
 
 ## Which GPUs Run This?
 
-The kernel ships as `.target sm_100a` PTX. What matters at run time is
-whether the driver JIT accepts that PTX for your GPU:
+There is no fixed `.target` in this example. `cargo oxide run` forwards the
+detected GPU as a hint (`CUDA_OXIDE_DEVICE_ARCH`, `sm_XYa` form for cc >= 9),
+and rustc-codegen-cuda builds for that GPU whenever the kernel's features run
+on it. sm_100a is only the fallback when no compatible GPU is detected:
 
 ```text
-sm_100a PTX ──JIT──► sm_100a (B100/B200/GB200)  ✓ runs
-            ──JIT──► sm_120  (RTX 5090)         ✓ runs (verified in #668)
-            ──JIT──► sm_90   (Hopper)           ✗ rejected; host reports a skip
-
-sm_90a PTX  ──JIT──► sm_90   (Hopper)           ? assembles; not yet run (#966)
+cargo oxide run on an RTX 5090 -> hint sm_120a -> .target sm_120a -> loads, runs
+cargo oxide run on an H100     -> hint sm_90a  -> .target sm_90a  -> expected to run (#966)
+no compatible GPU detected     -> no hint      -> .target sm_100a (fallback)
+  (cargo oxide build, or run on a pre-Hopper GPU)
 ```
+
+The host binary cannot see which target it embeds. If a module built on
+another machine, or with `--arch`, does not JIT on the local GPU, the
+load-failure arm prints the driver error and a `skipping:` line rather than
+guessing at a target.
 
 The multicast instruction itself has an sm_90+ floor in the intrinsic catalog,
 which matches the PTX ISA: `sm_90a` is advised there for performance, not
-required for legality. The host gate is therefore sm_90, not sm_100 — what
-keeps the default build off Hopper is its target, not the instruction.
+required for legality. The host gate is therefore sm_90, not sm_100.
