@@ -213,6 +213,7 @@ check-guards:
     bash scripts/check-toolchain-parity.sh
     bash scripts/check-cli-doc-coverage.sh
     bash scripts/check-book-api-names.sh
+    bash scripts/check-book-import-order.sh
     bash scripts/check-reserved-prefixes.sh
     bash scripts/check-device-only-build.sh
     bash scripts/check-test-matrix-coverage.sh
