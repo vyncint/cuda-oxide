@@ -151,8 +151,8 @@ TMA completion tracking relies on `ManagedBarrier` (or the raw `mbarrier_*`
 functions). The typestate API enforces the lifecycle at the type level:
 
 ```rust
-use cuda_device::barrier::{Barrier, ManagedBarrier, TmaBarrierHandle, Uninit, Ready};
 use cuda_device::SharedArray;
+use cuda_device::barrier::{Barrier, ManagedBarrier, Ready, TmaBarrierHandle, Uninit};
 
 #[kernel]
 pub fn tma_load_kernel(desc: *const TmaDescriptor) {
@@ -206,9 +206,7 @@ instead of barriers:
 
 ```rust
 use cuda_device::tma::{
-    cp_async_bulk_tensor_2d_s2g,
-    cp_async_bulk_commit_group,
-    cp_async_bulk_wait_group,
+    cp_async_bulk_commit_group, cp_async_bulk_tensor_2d_s2g, cp_async_bulk_wait_group,
 };
 
 unsafe {

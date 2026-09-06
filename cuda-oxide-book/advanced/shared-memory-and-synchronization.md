@@ -161,7 +161,7 @@ share a single shared memory pool across multiple logical arrays.
 size is set at launch time via `LaunchConfig::shared_mem_bytes`:
 
 ```rust
-use cuda_device::{DynamicSharedArray, kernel, thread};
+use cuda_device::{DisjointSlice, DynamicSharedArray, kernel, thread};
 
 #[kernel]
 pub fn reduce_dynamic(input: &[f32], n: u32, mut output: DisjointSlice<f32>) {

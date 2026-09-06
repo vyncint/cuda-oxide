@@ -33,9 +33,9 @@ The v0.1.0 release is an early-stage alpha: **expect bugs, incomplete features, 
 ## 🚀 Quick start
 
 ```rust
-use cuda_device::{kernel, launch_bounds, launch_contract, thread, DisjointSlice};
-use cuda_host::cuda_module;
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D};
+use cuda_device::{DisjointSlice, kernel, launch_bounds, launch_contract, thread};
+use cuda_host::cuda_module;
 
 #[cuda_module]
 mod kernels {

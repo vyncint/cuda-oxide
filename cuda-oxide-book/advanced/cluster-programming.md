@@ -105,7 +105,7 @@ pointer to the same offset in another block's shared memory. It lives in
 the cluster-shared address space, so you can just dereference it:
 
 ```rust
-use cuda_device::{cluster, SharedArray, thread};
+use cuda_device::{SharedArray, cluster, thread};
 
 static mut DATA: SharedArray<u32, 256> = SharedArray::UNINIT;
 
@@ -220,7 +220,7 @@ neighbors. Without clusters, this requires global memory writes and reads
 (or careful stream synchronization). With clusters, it is a local operation:
 
 ```rust
-use cuda_device::{kernel, cluster_launch, thread, cluster, SharedArray, DisjointSlice};
+use cuda_device::{DisjointSlice, SharedArray, cluster, cluster_launch, kernel, thread};
 
 const TILE_W: usize = 256;
 const HALO: usize = 1;

@@ -322,7 +322,7 @@ Putting shuffles and votes together, here is a kernel that computes the
 dot product of two vectors using warp reduction:
 
 ```rust
-use cuda_device::{kernel, thread, warp, DisjointSlice};
+use cuda_device::{DisjointSlice, kernel, thread, warp};
 
 #[kernel]
 pub fn warp_dot_product(
