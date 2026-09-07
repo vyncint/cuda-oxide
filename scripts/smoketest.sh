@@ -104,6 +104,45 @@ NO_LAUNCH_EXAMPLES=(wgmma_mma_bf16)
 # artifacts the shape check can read.
 NO_OPT_SHAPE_EXAMPLES=(const_bool_dead_branch)
 
+# Examples whose code-shape gates assert on *optimized* output, and so cannot
+# hold when full device debug is forced from the environment. Full debug skips
+# dialect-mir mem2reg and runs llc at -O0 by design, so the fused, vectorized
+# and promoted forms these gates grep for are simply not there (#1217).
+#
+# The list is named rather than derived because the distinction is per gate,
+# not per category: `debug` and `shared_debug` also build with full debug, and
+# their gates check source locations that exist *only* then, so they must keep
+# running. `const_bool_dead_branch`, `device_ffi_test` and the rest survive
+# -O0 and keep theirs too. Skipping by category would delete that coverage.
+#
+# This does not apply to smoketest's own `--device-debug` examples: the trigger
+# is the operator exporting CUDA_OXIDE_DEBUG=full over the whole sweep, which
+# is not a CI configuration.
+FULL_DEBUG_SHAPE_EXEMPT=(aligned_field_loads aligned_field_stores array_constants cluster copy_aggregate_borrow disjoint_slice_len dpx_minmax_chains generated_intrinsics generated_intrinsics_blackwell redux_f32 tcgen05)
+
+# Captured once, before anything in this script can set it, so the predicate
+# below answers "the operator forced full debug over the whole sweep" rather
+# than "this example happens to be built with --device-debug".
+FORCED_FULL_DEBUG=0
+if [[ "${CUDA_OXIDE_DEBUG:-}" == "full" ]]; then FORCED_FULL_DEBUG=1; fi
+
+# True when this example's code-shape gates cannot hold for this run. Writes
+# the reason into the log in the `skipping:` spelling verdict_standard already
+# recognises, so the example reports PASS (skipped) rather than a bare PASS: a
+# shape gate that stopped running must not look like one that passed.
+shape_gate_exempt() {
+    local ex="$1" log="$2" exempt
+    [[ ${FORCED_FULL_DEBUG} -eq 1 ]] || return 1
+    for exempt in "${FULL_DEBUG_SHAPE_EXEMPT[@]}"; do
+        if [[ "${ex}" == "${exempt}" ]]; then
+            printf 'skipping: code-shape gate for %s -- CUDA_OXIDE_DEBUG=full is forced, and these assertions describe optimized output (#1217)\n' \
+                "${ex}" >>"${log}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 classify() {
     local ex="$1" cat
     for cat in "${TCGEN05_EXAMPLES[@]}";     do [[ "$ex" == "$cat" ]] && { echo tcgen05;     return; }; done
@@ -925,6 +964,12 @@ run_cargo() {
             CARGO_EC=${llvm_ec}
             return
         fi
+        # The build is what this block still proves under forced full debug;
+        # everything after this point greps for optimized forms.
+        if shape_gate_exempt "${ex}" "${log}"; then
+            CARGO_EC=0
+            return
+        fi
         local llvm_ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
         local instruction_re='mma\.sp::ordered_metadata\.sync\.aligned\.m16n8k64\.row\.col\.kind::f8f6f4\.f32\.[[:alnum:]]+\.[[:alnum:]]+\.f32'
         local sparse_f16_instruction_re='mma\.sp::ordered_metadata\.sync\.aligned\.m16n8k64\.row\.col\.kind::f8f6f4\.f16\.(e2m1|e2m3|e3m2|e4m3|e5m2)\.(e2m1|e2m3|e3m2|e4m3|e5m2)\.f16'
@@ -1059,6 +1104,9 @@ run_cargo() {
         if [[ ${llvm_ec} -ne 0 ]]; then
             return
         fi
+        if shape_gate_exempt "${ex}" "${log}"; then
+            return
+        fi
         local llvm_ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
         local redux_f32_re='redux\.sync\.(min|max)(\.abs)?(\.NaN)?\.f32'
         # Each kernel must emit all eight forms inline. Count per entry body:
@@ -1130,6 +1178,12 @@ run_cargo() {
         fi
         if [[ ${llvm_ec} -ne 0 ]]; then
             CARGO_EC=${llvm_ec}
+            return
+        fi
+        # The build is what this block still proves under forced full debug;
+        # everything after this point greps for optimized forms.
+        if shape_gate_exempt "${ex}" "${log}"; then
+            CARGO_EC=0
             return
         fi
 
@@ -1533,6 +1587,12 @@ run_cargo() {
             CARGO_EC=${llvm_ec}
             return
         fi
+        # The build is what this block still proves under forced full debug;
+        # everything after this point greps for optimized forms.
+        if shape_gate_exempt "${ex}" "${log}"; then
+            CARGO_EC=0
+            return
+        fi
 
         local scalar_ptx_re='((mul|div)\.(rn|rz|rm|rp)(\.ftz)?\.f32|fma\.(rn|rz|rm|rp)(\.ftz)?(\.sat)?\.f32|add\.(rn|rz|rm|rp)(\.sat)?(\.ftz)?\.f32|(mul|div|fma|add)\.(rn|rz|rm|rp)\.f64)'
         local ampere_float_mma_re='mma\.sync\.aligned\.(m16n8k4\.row\.col\.f32\.tf32\.tf32\.f32|m16n8k8\.row\.col\.f16\.f16\.f16\.f16|m16n8k8\.row\.col\.f32\.bf16\.bf16\.f32|m16n8k8\.row\.col\.f32\.f16\.f16\.f32|m16n8k16\.row\.col\.f16\.f16\.f16\.f16)'
@@ -1728,7 +1788,8 @@ run_cargo() {
             fi
         done
     fi
-    if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
+    if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]] \
+        && ! shape_gate_exempt "${ex}" "${log}"; then
         if ! bash "${shape_check}" >>"${log}" 2>&1; then
             printf '%s failed its verify-code-shape.sh assertions\n' "${ex}" >>"${log}"
             CARGO_EC=1
@@ -1752,7 +1813,8 @@ run_cargo() {
             CARGO_EC=1
         fi
     fi
-    if [[ ${CARGO_EC} -eq 0 && "${ex}" == "disjoint_slice_len" ]]; then
+    if [[ ${CARGO_EC} -eq 0 && "${ex}" == "disjoint_slice_len" ]] \
+        && ! shape_gate_exempt "${ex}" "${log}"; then
         local llvm_ir="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"
         local kernel_ir loaded_slice extracted_len
         kernel_ir="$(
@@ -1788,7 +1850,8 @@ run_cargo() {
             CARGO_EC=1
         fi
     fi
-    if [[ ${CARGO_EC} -eq 0 && ${COMPILE_ONLY} -eq 1 && "${ex}" == "cluster" ]]; then
+    if [[ ${CARGO_EC} -eq 0 && ${COMPILE_ONLY} -eq 1 && "${ex}" == "cluster" ]] \
+        && ! shape_gate_exempt "${ex}" "${log}"; then
         local ptx="crates/rustc-codegen-cuda/examples/cluster/cluster.ptx"
         local body cluster_count cluster_unique ncluster_count ncluster_unique mad_count mul_count store_count
         body="$(awk '/^\.visible \.entry compile_cluster_grid_helpers\(/,/^}/' "${ptx}" 2>/dev/null)"
